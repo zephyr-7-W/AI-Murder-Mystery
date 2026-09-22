@@ -1,0 +1,10 @@
+venv/
+
+# 本地会话持久化数据库（自动生成）
+.game_sessions.db*
+
+__pycache__/
+
+.env
+
+*.pyc

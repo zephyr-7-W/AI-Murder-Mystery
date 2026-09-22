@@ -1,0 +1,43 @@
+# ---------- 密钥 / 本地配置（绝不入库） ----------
+.env
+.env.*
+!.env.example
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+*.egg-info/
+build/
+wheels/
+
+# ---------- 本地会话持久化数据库 ----------
+*.db
+*.db-shm
+*.db-wal
+
+# ---------- Node / 前端 ----------
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# ---------- 需求文档渲染产物（由 create_requirements_doc.py 重新生成） ----------
+requirements_render/
+
+# ---------- 编辑器 / 系统 ----------
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# ---------- Notebook / 日志 ----------
+.ipynb_checkpoints/
+*.log
+*.tmp

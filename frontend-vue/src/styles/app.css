@@ -1,0 +1,56 @@
+/* 全局基础与阅读辅助（主题/字号缩放在 html[data-*] 上生效） */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #eef1f5;
+  min-height: 100vh;
+  transition: background-color 0.25s ease, color 0.2s ease;
+}
+
+html[data-theme="dark"] body {
+  background: #0e1116;
+}
+
+/* 字号档位：标准 / 大字 / 特大（作用于整局画面，保持布局稳定） */
+html[data-font="2"] #app {
+  zoom: 1.09;
+}
+html[data-font="3"] #app {
+  zoom: 1.2;
+}
+
+/* 主要面板主题切换时平滑过渡 */
+html[data-theme] .game-wrapper,
+html[data-theme] .panel-card,
+html[data-theme] .scene-overview,
+html[data-theme] .dialogue-section,
+html[data-theme] .history-panel,
+html[data-theme] .evidence-board,
+html[data-theme] .accuse-modal,
+html[data-theme] .dossier,
+html[data-theme] .form-wrap,
+html[data-theme] .archive-list,
+html[data-theme] .score-card,
+html[data-theme] .reason-box,
+html[data-theme] .guess-history,
+html[data-theme] .recap-box,
+html[data-theme] .next-round-box {
+  transition: background-color 0.25s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+/* 夜间主题时让系统控件（输入框下拉等）跟随 */
+html[data-theme="dark"] input,
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select {
+  color-scheme: dark;
+}
