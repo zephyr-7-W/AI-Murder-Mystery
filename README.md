@@ -97,6 +97,5 @@ python -m role_skeleton.selfcheck      # 骨架层离线自检（24 项）
 
 ## 说明
 
-- 仓库不含任何 API Key：`backend/.env`、`venv/`、`node_modules/`、会话数据库与渲染产物均已在 `.gitignore` 中排除。
-- 需求分析文档见 `AI悬疑推理游戏需求分析文档.docx`（由 `create_requirements_doc.py` 生成）。
+- 仓库不含任何 API Key：`backend/.env`、`venv/`、`node_modules/`、会话数据库等均已在 `.gitignore` 中排除。
 - 更多架构笔记见 `backend/readme.md`，骨架层设计与文件地图见 `backend/role_skeleton/README.md`。

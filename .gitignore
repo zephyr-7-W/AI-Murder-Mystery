@@ -27,9 +27,6 @@ npm-debug.log*
 pnpm-debug.log*
 yarn-error.log*
 
-# ---------- 需求文档渲染产物（由 create_requirements_doc.py 重新生成） ----------
-requirements_render/
-
 # ---------- 编辑器 / 系统 ----------
 .idea/
 .vscode/*
