@@ -1,58 +1,65 @@
 # AGENTS.md
 
-## 项目
-AI 悬疑推理游戏：玩家与 NPC 多轮对话收集线索、最终指认凶手。
-后端 FastAPI + WebSocket，前端 Vue3 + Pinia。
+## Project
+AI murder mystery game: the player talks with NPCs over multiple rounds to collect clues and finally names the
+murderer. Backend is FastAPI + WebSocket; frontend is Vue 3 + Pinia.
 
-## 硬约束（改代码前必读）
-1. **真相隔离不可破坏**：真凶身份、`murder_process`、`role_skeleton` 的 `secrets` / `private_facts`
-   只能存在于服务端内部 state；对外序列化只走 `backend/main.py` 的 `_serialize_state` 白名单，
-   新增对外字段必须同步该白名单。
-2. **揭示门控在服务端**：线索放行只由 `backend/oracle.py` 判定（阶段 0 行踪 → 1 矛盾 → 2 决定性）。
-   未放行的揭示文本不得拼进任何 NPC prompt。
-3. **骨架深度不可变**：`role_skeleton` 的模型是 frozen + tuple，只经 `prompt.render_skeleton_block`
-   只读渲染；任何代码不得原地改写骨架。
-4. **LLM 调用统一入口**：一律走 `backend/llm_util.py` 的 `call_llm`，不要在业务代码里直接
-   `llm.invoke`；失败必须能退到确定性兜底（参考 `backend/deterministic_game.py`）。
-5. **动作幂等**：WS 动作都带 `client_msg_id`；新增动作要加进 `main._IDEMPOTENT_ACTIONS`
-   并走 `_remember_action` 去重，保证断线重连补发不会重复回话。
+## Hard constraints (read before changing code)
+1. **Truth isolation must never be broken**: the murderer's identity, `murder_process`, and the `secrets` /
+   `private_facts` of `role_skeleton` may only live in server-side internal state. Outbound serialization goes
+   exclusively through the `_serialize_state` allowlist in `backend/main.py`; any new outbound field must be
+   added to that allowlist at the same time.
+2. **Reveal gating is server-side**: clue release is decided solely by `backend/oracle.py` (stage 0 alibi ->
+   1 contradiction -> 2 decisive). Unreleased reveal text must never be spliced into any NPC prompt.
+3. **Skeleton depth is immutable**: `role_skeleton` models are frozen + tuple and are rendered read-only via
+   `prompt.render_skeleton_block`; no code may rewrite a skeleton in place.
+4. **Single entry point for LLM calls**: always go through `call_llm` in `backend/llm_util.py`; do not call
+   `llm.invoke` directly from business code. Failures must be able to fall back deterministically (see
+   `backend/deterministic_game.py`).
+5. **Idempotent actions**: every WebSocket action carries a `client_msg_id`; new actions must be added to
+   `main._IDEMPOTENT_ACTIONS` and deduplicated through `_remember_action`, so replay after a reconnect never
+   answers twice.
 
-## 目录地图
-- `backend/main.py` — WS 接口与会话编排（`/ws/game/{session_id}`、`/api/games`）
-- `backend/dialogue.py` / `coach.py` / `judge.py` — 对话、代问、结算打分
-- `backend/oracle.py` / `backend/role_skeleton/` — 真相门控与角色骨架层
-- `backend/persistence.py` — SQLite 会话持久化
-- `frontend-vue/src/api/gameSocket.ts` — 前端 WS 入口
+## Directory map
+- `backend/main.py` — WebSocket endpoint and session orchestration (`/ws/game/{session_id}`, `/api/games`)
+- `backend/dialogue.py` / `coach.py` / `judge.py` — conversation, assistant questions, scoring
+- `backend/oracle.py` / `backend/role_skeleton/` — truth gating and the role skeleton layer
+- `backend/persistence.py` — SQLite session persistence
+- `frontend-vue/src/api/gameSocket.ts` — frontend WebSocket entry
 
-## 常用命令（在 backend 目录执行）
-- 启动服务：`python -m uvicorn main:app --reload`
-- 单元测试：`python -m pytest tests/test_core.py`
-- 骨架层离线自检（24 项）：`python -m role_skeleton.selfcheck`
-- 离线模式：设 `AI_MURDER_OFFLINE=1` 走确定性路径
+## Common commands (run from the backend directory)
+- Start the server: `python -m uvicorn main:app --reload`
+- Unit tests: `python -m pytest tests/test_core.py`
+- Offline skeleton self-check (24 checks): `python -m role_skeleton.selfcheck`
+- Offline mode: set `AI_MURDER_OFFLINE=1` to use the deterministic path
 
-## Friday 记忆协作（本机自托管，http://127.0.0.1:8080）
-- 会话开始时调用 `get_context`；开发新功能或回答架构问题前先 `memory_search`。
+## Friday memory collaboration (self-hosted locally, http://127.0.0.1:8080)
+- Call `get_context` at the start of a session; run `memory_search` before developing a new feature or
+  answering architecture questions.
 
-### 决策记录协议（改完模块的默认动作）
-改完一个模块、且相关测试通过后，**默认**记一条 `add_memory`（`project="ai-murder-mystery"`）。
-四段式，没有内容的段落也要写"无"：
+### Decision record protocol (default action after finishing a module)
+After finishing a module and having its tests pass, **by default** record one `add_memory`
+(`project="ai-murder-mystery"`). Four sections; write "none" for any section with no content:
 
 ```
-[模块名] 改动：<做了什么>
-原因：<为什么必须改 / 触发问题是什么>
-取舍：<放弃了什么方案、代价是什么>
-影响面：<涉及哪些契约、白名单、其他模块，后续要注意什么>
+[module name] Change: <what was done>
+Reason: <why it had to change / what the triggering problem was>
+Tradeoff: <what was given up, and at what cost>
+Blast radius: <which contracts, allowlists, or other modules are involved; what to watch for later>
 ```
 
-- 触发条件：新增或重构模块、改变 WS 动作或对外契约、改变 `_serialize_state` 白名单、
-  改变 oracle 放行规则、改变骨架结构、修复复发代价高的坑。
-- 不记录：格式化、重命名、改错别字、纯样式调整、一次性的调试改动。
-- 一次改动只记一条；同一模块反复小改时合并成一条，不要刷屏。
-- 逐字保真的规则 / 常量 / 阈值一律用 `add_fact`，不要塞进 memory（会被改写）。
+- Triggers: adding or refactoring a module, changing WebSocket actions or outbound contracts, changing the
+  `_serialize_state` allowlist, changing oracle release rules, changing skeleton structure, fixing a pitfall
+  that is expensive to hit again.
+- Do not record: formatting, renames, typo fixes, pure styling changes, one-off debugging changes.
+- One record per change; merge repeated small edits to the same module into one record instead of flooding.
+- Rules / constants / thresholds that must be preserved verbatim always go through `add_fact`, never into
+  memory (where they get rewritten).
 
-### 禁止写入 Friday
-真凶身份、`murder_process`、骨架 `secrets` / `private_facts`、oracle 未放行揭示文本、玩家对局数据。
-Friday 的 `/add` 会把这些内容外发给 Mem0 云与 DeepSeek。
+### Never write to Friday
+The murderer's identity, `murder_process`, skeleton `secrets` / `private_facts`, unreleased oracle reveal
+text, or player match data. Friday's `/add` sends this content out to Mem0 cloud and DeepSeek.
 
-### 检索注意
-`memory_search` 返回的是 Mem0 用英文重写的提炼版，不是原文；`add_fact` 才逐字保留、可版本化。
+### Search caveat
+`memory_search` returns Mem0's English-rewritten digest, not the original text; only `add_fact` preserves
+content verbatim and is versioned.

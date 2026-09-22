@@ -1,91 +1,123 @@
-# 项目运用的核心知识
+# Core Knowledge Used in This Project
 
-> **架构提示（2026-09 更新）**：下面大部分篇幅是早期 LangGraph 教学梳理；当前 Web 版（backend/main.py 的
-> `/ws/game/{session_id}`）的主链路已经不再逐节点跑主图/子图，而是 **WS 动作驱动 + 内存会话 + SQLite 持久化**：
-> - 每个动作（player_message / auto_ask / investigate / ask_hint / confront / make_guess …）带 `client_msg_id`，
->   服务端按 session 串行加锁处理并按消息 id 去重，断线重连补发不会“同一句回两遍”；
-> - 真相 oracle（backend/oracle.py）以**分阶段揭示表**放行线索（行踪→矛盾→决定性），未放行的秘密不进 NPC 上下文，
->   附带接近度软反馈，避免“聊了很多却一条不亮”或“一上来就泄底”；
-> - 对话、代问、调查、提示、结算拆到 backend/dialogue.py、backend/coach.py、backend/judge.py；
->   统一 LLM 调用封装在 backend/llm_util.py（重试/退避/限流）；结算打分可注入 fake LLM 单测；
-> - 对局列表 REST：GET /api/games、GET/DELETE /api/games/{session_id}（换设备不丢历史）。
-> 新增/重构模块单测见 backend/tests/test_core.py；离线自检见 `role_skeleton/selfcheck`。
-
+> **Architecture note (updated 2026-09)**: most of what follows is an early LangGraph teaching walkthrough. The
+> current web version (the `/ws/game/{session_id}` endpoint in backend/main.py) no longer runs the main graph
+> and subgraph node by node. Its main path is now **WebSocket action driven + in-memory sessions + SQLite
+> persistence**:
+> - Every action (player_message / auto_ask / investigate / ask_hint / confront / make_guess ...) carries a
+>   `client_msg_id`; the server processes each session serially under a lock and deduplicates by message id, so
+>   replay after a reconnect never answers the same line twice;
+> - the truth oracle (backend/oracle.py) releases clues through a **staged disclosure table**
+>   (alibi -> contradiction -> decisive). Unreleased secrets never enter an NPC's context, and it adds soft
+>   proximity feedback so that players neither "chat a lot without lighting up a single clue" nor get the whole
+>   truth spoiled immediately;
+> - conversation, assistant questions, investigation, hints, and scoring are split across
+>   backend/dialogue.py, backend/coach.py, and backend/judge.py; all LLM calls are wrapped in
+>   backend/llm_util.py (retry / backoff / rate limiting); scoring can be unit tested by injecting a fake LLM;
+> - match list REST: GET /api/games, GET/DELETE /api/games/{session_id} (history survives a device switch).
+> Unit tests for new or refactored modules live in backend/tests/test_core.py; the offline self-check is
+> `role_skeleton/selfcheck`.
 
 ## 1. LangGraph
-状态图State Graph：有向图编排业务流程，节点、边、条件分支实现游戏状态流转；
-Typed State（Pydantic状态）：
--- GenerateGameState：主图全局游戏状态（角色、案情、剩余次数、选中角色ID、全局消息
--- ConversationState：子图独立状态，单NPC对话会话隔离
-子图SubGraph：一张主图内嵌一张对话子图，处理玩家与多个单NPC多轮循环对话
-条件边conditional_edges：根据返回值做分支跳转（退出对话回到主流程、猜错凶手返回调查）；
-递归限制recursion_limit：防止对话无限循环
+State graph: a directed graph orchestrates the business flow; nodes, edges, and conditional branches drive game
+state transitions.
+Typed state (Pydantic):
+-- GenerateGameState: global game state for the main graph (characters, case, remaining attempts, selected
+   character id, global messages)
+-- ConversationState: an isolated subgraph state for a single-NPC conversation session
+Subgraph: one conversation subgraph embedded in the main graph, handling multi-round loops between the player
+and each individual NPC.
+Conditional edges: branch on the return value (leaving a conversation returns to the main flow; a wrong guess
+returns to investigation).
+Recursion limit: prevents an unbounded conversation loop.
 
-## 2. LLM应用工程
-System Prompt工程：复杂结构化Prompt约束大模型输出；区分普通对话Prompt + JSON强制输出Prompt；
-结构化输出容错：LLM输出不稳定，去除“json标记、异常list转字符串、最多3次重试机制”；
-Pydantic数据模型校验：Character/NPC/StoryDetails/ConversationState做数据校验，拦截LLM脏输出；
-提示词隔离真相：内部仅给LLM看凶手真相，输出内容严禁泄露凶手，实现误导线索生成。
+## 2. LLM application engineering
+System prompt engineering: complex structured prompts constrain the model's output; normal conversation prompts
+are separated from JSON-forced-output prompts.
+Structured output tolerance: LLM output is unstable, so strip JSON code-fence markers, convert odd lists to
+strings, and retry up to 3 times.
+Pydantic model validation: Character / NPC / StoryDetails / ConversationState validate data and block dirty LLM
+output.
+Prompt-level truth isolation: only the internal side sees the murderer's truth, while the output side is
+strictly forbidden from revealing the murderer, which is what makes misleading-clue generation possible.
 
-## 3. Python基础工程
-面向对象Pydantic模型，强类型数据封装；
-JSON清洗、异常捕获、重试逻辑；
-rich终端UI库：面板、表格、交互式命令行输入输出（原型控制台界面）；
-随机逻辑：角色列表随机打乱，避免凶手位置固定。
+## 3. Core Python engineering
+Object-oriented Pydantic models with strongly typed data encapsulation.
+JSON cleaning, exception handling, retry logic.
+The rich terminal UI library: panels, tables, interactive command-line input/output (the prototype console UI).
+Randomization: the character list is shuffled so the murderer's position is never fixed.
 
-## 4. web层
+## 4. Web layer
 
-## 5. 业务设计
+## 5. Business design
 
-# 完整工作流：主图 + 对话子图
-## 主图 GenerateGameState（7 个节点）
-create_characters：游戏初始化第一步。接收场景environment、最大角色数；调用 LLM 生成整套人物；强制保证 1 个凶手、1 个受害者，其余嫌疑人；JSON 容错重试；返回characters角色列表存入状态。
+# Full workflow: main graph + conversation subgraph
+## Main graph GenerateGameState (7 nodes)
+create_characters: the first step of game initialization. Takes the environment and the max character count;
+calls the LLM to generate the whole cast; enforces exactly 1 murderer and 1 victim with the rest as suspects;
+retries on JSON errors; returns the character list into state.
 
-create_story：生成完整案件剧情。基于已经生成好的角色，让 LLM 生成凶杀案全部细节：死亡时间、地点、凶器、现场、证人、线索、人物关系摘要、作案真相 murder_process；清洗修复 LLM 异常输出；返回story_details案情对象。
+create_story: generates the full case. Based on the already-generated characters, the LLM produces every
+detail of the murder: time of death, location, weapon, scene, witnesses, clues, relationship summary, and the
+murder truth `murder_process`; cleans and repairs malformed LLM output; returns the story_details case object.
 
-narrartor：生成开场案情旁白，渲染游戏开篇，把开场消息存入 state 的 messages。
+narrartor: generates the opening case narration, renders the game prologue, and stores the opening message in
+state's messages.
 
-sherlock：角色选择节点：展示全部角色列表；接收玩家输入；返回selected_character_id。
+sherlock: the character selection node: shows the full character list, reads player input, and returns
+selected_character_id.
 
-conversation：子图入口调度节点：拿到选中角色 ID，动态构建对话子图实例并 invoke 运行子图；完整跑完玩家和该 NPC 的多轮对话；对话结束后把子图的全部对话消息合并回主图 state。
+conversation: the subgraph entry dispatch node: takes the selected character id, dynamically builds a
+conversation subgraph instance and invokes it, runs the full multi-round conversation between the player and
+that NPC, then merges all subgraph conversation messages back into the main graph state.
 
-guesser：最终指认凶手节点。展示嫌疑人列表；读取玩家输入编号；比对是否真凶；猜对：游戏结束；猜错扣次数；次数没耗尽返回sherlock回到调查；次数归零直接失败结束。返回result用于条件边判断跳转。
+guesser: the final accusation node. Shows the suspect list, reads the player's chosen number, and compares it
+against the real murderer. Correct: game over. Wrong: lose an attempt. Attempts remain: return to sherlock to
+keep investigating. Attempts exhausted: fail and end. Returns `result` for the conditional edge to branch on.
 
 START
-  ↓
-create_characters → create_story → narrartor → sherlock（选角色）
-  ├─有选中角色ID → conversation（运行对话子图） → 回到 sherlock
-  └─selected_character_id=None → guesser（进入指认）
-    ├ result="sherlock" → 返回 sherlock继续调查
-    └ result="end" → END 游戏结束
+  |
+create_characters -> create_story -> narrartor -> sherlock (pick a character)
+  |-- selected character id present -> conversation (run the conversation subgraph) -> back to sherlock
+  |-- selected_character_id=None -> guesser (enter accusation)
+        |-- result="sherlock" -> return to sherlock, keep investigating
+        |-- result="end" -> END, game over
 
-## 对话子图 ConversationState（5 个节点，处理单 NPC 多轮聊天）
-character_introduction：NPC 自我介绍：根据角色人设 + 案件背景，调用 LLM 生成人物开场白。
+## Conversation subgraph ConversationState (5 nodes, handles multi-round chat with one NPC)
+character_introduction: NPC self-introduction: based on the character persona and the case background, the LLM
+generates an opening line.
 
-ask_question：获取玩家问题：交互询问是否开启 AI 侦探助手；y 则调用get_question由 LLM 生成犀利提问；n 读取玩家手动输入；把问题封装HumanMessage。
+ask_question: obtains the player's question: interactively asks whether to enable the AI detective assistant;
+on "y" it calls get_question so the LLM generates a sharp question; on "n" it reads the player's manual input;
+wraps the question as a HumanMessage.
 
-get_question：AI 侦探助手：基于对话历史、案件细节，生成一条追问问题。（被 ask_question 内部调用）
+get_question: the AI detective assistant: based on conversation history and case details, generates one
+follow-up question. (Called internally by ask_question.)
 
-answer_question：拟NPC 回答核心：传入完整人设、案件、历史对话；LLM 模角色回答，可以说谎隐瞒；输出 AIMessage 存入子图 messages。
+answer_question: the core of the role-played NPC answers: receives the full persona, the case, and the
+conversation history; the LLM answers in character and may lie or withhold; outputs an AIMessage into the
+subgraph messages.
 
-where_to_go：条件路由函数，不是真正节点：判断玩家输入是否包含EXIT。continue：继续循环问答；end：退出子图返回主流程。
+where_to_go: a conditional routing function, not a real node: checks whether the player's input contains EXIT.
+continue: keep looping questions and answers; end: leave the subgraph and return to the main flow.
 
-START → character_introduction → ask_question
-  ├ where_to_go: continue → answer_question → ask_question（循环提问回答）
-  └ where_to_go: end → END（退出子图回到主图）
+START -> character_introduction -> ask_question
+  |-- where_to_go: continue -> answer_question -> ask_question (loop)
+  |-- where_to_go: end -> END (leave the subgraph, back to the main graph)
 
-# 6. 角色硬约束骨架层（role_skeleton）
+# 6. Role hard-constraint skeleton layer (role_skeleton)
 
-在现有 LangGraph 编排之上，新增一层**可复用的“角色硬约束骨架”**：
-每个 Agent = 静态骨架（秘密/时间线/底线/禁止输出清单/知识边界，独立存储、不可改写）
-+ 动态对话层（只负责表达）。
+On top of the existing LangGraph orchestration, this adds a **reusable "role hard-constraint skeleton"**:
+every agent = a static skeleton (secrets / timeline / red lines / forbidden output list / knowledge bounds,
+stored separately and immutable) + a dynamic conversation layer that only handles expression.
 
-- 已落地：Web 实时对话（main.py 的 _answer_as_character）已注入骨架并接入
-  生成→防泄露审查→修正重试→确定性兜底闭环；
-- 检测器不依赖第二个 LLM：字面短语 + 正则 + 出戏话术 + 秘密/知识边界锚点长串匹配；
-- 支持剧本杀以外的通用沙盘（商务谈判/项目推演等，见 examples JSON）；
-- 离线自检 24 项：backend 目录执行
+- Shipped: the real-time web conversation (`_answer_as_character` in main.py) injects the skeleton and runs the
+  full generate -> anti-leak audit -> corrective retry -> deterministic fallback loop;
+- the detector does not depend on a second LLM: literal phrases + regex + out-of-character phrasing +
+  long-string anchor matching for secrets and knowledge bounds;
+- supports sandboxes beyond murder mystery (business negotiation, project simulation, etc.; see the examples
+  JSON);
+- 24 offline self-checks: run from the backend directory
   `venv\Scripts\python.exe -m role_skeleton.selfcheck`
 
-详细设计与文件地图见 role_skeleton/README.md。
-
+Design details and the file map are in role_skeleton/README.md.
