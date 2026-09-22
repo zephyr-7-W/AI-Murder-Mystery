@@ -1,48 +1,51 @@
-# AI 悬疑推理游戏
+# AI Murder Mystery
 
-玩家扮演侦探，与多名 NPC 多轮对话收集线索，最终指认凶手。服务端用「分阶段揭示」控制真相放行节奏，
-并叠加一层角色硬约束骨架，防止 NPC 泄底或出戏。
+You play a detective questioning several NPCs across multiple rounds to gather clues and ultimately name the
+murderer. The server paces the truth with staged disclosure and layers a hard-constraint role skeleton on top
+so NPCs never leak secrets or break character.
 
-## 玩法
+## Gameplay
 
-1. 服务端为每局生成一套人物与案情（1 名凶手 + 1 名受害者 + 若干嫌疑人）。
-2. 玩家自由选择嫌疑人对话，问行踪、追问矛盾、调查现场、请助手代问。
-3. 线索按阶段放行：**阶段 0 行踪 → 阶段 1 矛盾 → 阶段 2 决定性**；未放行的秘密不会进入 NPC 上下文。
-4. 在有限次数内指认凶手，服务端结算打分。
+1. The server generates a cast and a case for every session (1 murderer + 1 victim + several suspects).
+2. You question suspects freely: ask about alibis, press on contradictions, investigate the scene, or have the
+   assistant ask on your behalf.
+3. Clues are released in stages: **stage 0 alibi -> stage 1 contradiction -> stage 2 decisive**. Secrets that
+   have not been released never enter an NPC's context.
+4. Name the murderer within a limited number of attempts; the server scores the outcome.
 
-## 技术栈
+## Tech Stack
 
-| 层 | 选型 |
+| Layer | Choice |
 | --- | --- |
-| 后端 | FastAPI + WebSocket，httpx，Pydantic |
-| LLM | LangChain / LangGraph，DeepSeek（OpenAI 兼容接口） |
-| 前端 | Vue 3 + Pinia + Vite + TypeScript + Sass |
-| 持久化 | SQLite（会话与对局历史） |
+| Backend | FastAPI + WebSocket, httpx, Pydantic |
+| LLM | LangChain / LangGraph, DeepSeek (OpenAI-compatible API) |
+| Frontend | Vue 3 + Pinia + Vite + TypeScript + Sass |
+| Storage | SQLite (sessions and match history) |
 
-## 目录结构
+## Project Layout
 
 ```
 backend/
-  main.py               WebSocket 接口与会话编排（/ws/game/{session_id}），REST /api/games
-  dialogue.py           玩家与 NPC 对话
-  coach.py              助手代问
-  judge.py              最终指认与结算打分
-  oracle.py             真相门控：分阶段揭示表
-  role_skeleton/        角色骨架层（秘密 / 时间线 / 底线 / 知识边界，frozen + tuple）
-  persistence.py        SQLite 会话持久化
-  deterministic_game.py 离线确定性兜底
-  llm_util.py           统一 LLM 调用入口（重试 / 退避 / 限流）
-  tests/test_core.py    单元测试
+  main.py               WebSocket endpoint and session orchestration (/ws/game/{session_id}), REST /api/games
+  dialogue.py           Player <-> NPC conversation
+  coach.py              Assistant asks on the player's behalf
+  judge.py              Final accusation and scoring
+  oracle.py             Truth gating: staged disclosure table
+  role_skeleton/        Role skeleton (secrets / timeline / red lines / knowledge bounds, frozen + tuple)
+  persistence.py        SQLite session persistence
+  deterministic_game.py Offline deterministic fallback
+  llm_util.py           Single entry point for LLM calls (retry / backoff / rate limiting)
+  tests/test_core.py    Unit tests
 frontend-vue/
-  src/api/gameSocket.ts 前端 WS 入口
-  src/stores/           Pinia store
-  src/components/       对话面板、证据板、时间线、嫌疑人档案等
+  src/api/gameSocket.ts Frontend WebSocket entry
+  src/stores/           Pinia stores
+  src/components/       Chat panel, evidence board, timeline, suspect dossier, and more
   src/views/            Home / Game / Result
 ```
 
-## 快速开始
+## Getting Started
 
-### 后端
+### Backend
 
 ```bash
 cd backend
@@ -51,26 +54,26 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-在 `backend/.env` 写入（该文件已被 git 忽略）：
+Put this in `backend/.env` (already git-ignored):
 
 ```
-DEEPSEEK_API_KEY=你的_key
+DEEPSEEK_API_KEY=your_key
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
 ```
 
-启动服务：
+Start the server:
 
 ```bash
 python -m uvicorn main:app --reload
 ```
 
-不配置 Key 也可以跑，或显式强制离线走确定性路径：
+It also runs without a key, or you can force the offline deterministic path:
 
 ```bash
 $env:AI_MURDER_OFFLINE = "1"   # PowerShell
 ```
 
-### 前端
+### Frontend
 
 ```bash
 cd frontend-vue
@@ -78,24 +81,31 @@ npm install
 npm run dev
 ```
 
-## 常用命令（在 backend 目录执行）
+## Common Commands (run from the backend directory)
 
 ```
-python -m uvicorn main:app --reload    # 启动服务
-python -m pytest tests/test_core.py    # 单元测试
-python -m role_skeleton.selfcheck      # 骨架层离线自检（24 项）
+python -m uvicorn main:app --reload    # start the server
+python -m pytest tests/test_core.py    # unit tests
+python -m role_skeleton.selfcheck      # offline skeleton self-check (24 checks)
 ```
 
-## 核心设计
+## Core Design
 
-- **真相隔离**：真凶身份、作案过程、骨架的 secrets / private_facts 只存在于服务端内部 state；
-  对外序列化只走 `backend/main.py` 的白名单，新增对外字段必须同步该白名单。
-- **揭示门控在服务端**：线索是否放行只由 `backend/oracle.py` 判定，未放行的揭示文本不会拼进任何 NPC prompt。
-- **骨架深度不可变**：`role_skeleton` 的模型为 frozen + tuple，只经只读渲染，任何代码不得原地改写。
-- **LLM 调用统一入口**：一律走 `backend/llm_util.py` 的 `call_llm`，失败必须能退到确定性兜底。
-- **动作幂等**：WS 动作都带 `client_msg_id`，服务端按消息 id 去重，断线重连补发不会重复回话。
+- **Truth isolation**: the murderer's identity, the murder process, and the skeleton's secrets / private_facts
+  live only in server-side state. Outbound serialization goes exclusively through the allowlist in
+  `backend/main.py`; any new outbound field must be added to that allowlist.
+- **Reveal gating is server-side**: whether a clue is released is decided solely by `backend/oracle.py`, and
+  unreleased reveal text is never spliced into any NPC prompt.
+- **Skeleton depth is immutable**: `role_skeleton` models are frozen + tuple and rendered read-only; no code
+  may rewrite them in place.
+- **Single entry point for LLM calls**: always go through `call_llm` in `backend/llm_util.py`, and any failure
+  must be able to fall back deterministically.
+- **Idempotent actions**: every WebSocket action carries a `client_msg_id`, deduplicated server-side, so replay
+  after a reconnect never answers twice.
 
-## 说明
+## Notes
 
-- 仓库不含任何 API Key：`backend/.env`、`venv/`、`node_modules/`、会话数据库等均已在 `.gitignore` 中排除。
-- 更多架构笔记见 `backend/readme.md`，骨架层设计与文件地图见 `backend/role_skeleton/README.md`。
+- No API keys are stored in this repository: `backend/.env`, `venv/`, `node_modules/`, session databases, and
+  similar are all excluded via `.gitignore`.
+- More architecture notes live in `backend/readme.md`; the skeleton layer design and file map are in
+  `backend/role_skeleton/README.md`.
