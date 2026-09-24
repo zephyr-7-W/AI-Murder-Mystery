@@ -21,6 +21,7 @@ so NPCs never leak secrets or break character.
 | LLM | LangChain / LangGraph, DeepSeek (OpenAI-compatible API) |
 | Frontend | Vue 3 + Pinia + Vite + TypeScript + Sass |
 | Storage | SQLite (sessions and match history) |
+| Evaluation | Ragas + deterministic gating metrics, offline batch only (`backend/evaluation/`) |
 
 ## Project Layout
 
@@ -36,6 +37,7 @@ backend/
   deterministic_game.py Offline deterministic fallback
   llm_util.py           Single entry point for LLM calls (retry / backoff / rate limiting)
   tests/test_core.py    Unit tests
+  evaluation/           Offline evaluation (Ragas + gating metrics); never imported by the game runtime
 frontend-vue/
   src/api/gameSocket.ts Frontend WebSocket entry
   src/stores/           Pinia stores
@@ -87,6 +89,8 @@ npm run dev
 python -m uvicorn main:app --reload    # start the server
 python -m pytest tests/test_core.py    # unit tests
 python -m role_skeleton.selfcheck      # offline skeleton self-check (24 checks)
+python -m evaluation.run_eval          # offline evaluation: deterministic metrics (free, seconds)
+python -m evaluation.run_eval --mode llm --ragas reference   # + Ragas metrics (needs a key)
 ```
 
 ## Core Design
@@ -102,6 +106,100 @@ python -m role_skeleton.selfcheck      # offline skeleton self-check (24 checks)
   must be able to fall back deterministically.
 - **Idempotent actions**: every WebSocket action carries a `client_msg_id`, deduplicated server-side, so replay
   after a reconnect never answers twice.
+
+## Evaluation (Ragas)
+
+Evaluation and gameplay are deliberately two separate paths. Ragas scoring costs an extra LLM call per sample
+— fine for a batch run, unacceptable inside a live game loop — so it never sits on the WebSocket action path:
+
+| | Development / evaluation | Live gameplay |
+| --- | --- | --- |
+| Entry point | `python -m evaluation.run_eval` | WebSocket actions |
+| Ragas | Yes | **No** |
+| Dependencies | `requirements-eval.txt` (optional) | `requirements.txt` only |
+| Why | reproducible metrics for the README / paper | latency and cost stay untouched |
+
+The harness drives the **same** assembly as production (`oracle` release gating -> reveal bookkeeping ->
+read-only skeleton injection -> LeakGuard loop); it just replaces the WebSocket with a batch loop.
+
+Run the deterministic metrics first — offline, free, reproducible, seconds:
+
+```bash
+cd backend
+python -m evaluation.run_eval
+```
+
+Add the Ragas semantic metrics (needs `DEEPSEEK_API_KEY` and real model calls; a separate venv is recommended
+so the optional dependency cannot downgrade the game's LangChain stack):
+
+```bash
+cd backend
+venv\Scripts\python.exe -m pip install -r requirements-eval.txt
+venv\Scripts\python.exe -m evaluation.run_eval --mode llm --ragas reference
+```
+
+### Metrics
+
+| Family | Needs a model | Metrics |
+| --- | --- | --- |
+| Deterministic gating | no | release precision / recall / F1, over- and under-release rate, stage-assert pass rate, **gate-integrity pass rate** (never release deeper than the cleared frontier), LeakGuard clean rate, premature-disclosure rate, truth-leak rate, ladder depth, latency p50/p95 |
+| Ragas `reference` | yes | Faithfulness, Answer Relevancy, Context Precision, Context Recall, Answer Correctness |
+| Ragas `reference_free` | yes | Faithfulness, Answer Relevancy over **all** cases, including prompt-injection and confession-fishing ones |
+
+Ragas sample fields: `user_input` = player turn, `response` = NPC reply, `retrieved_contexts` = exactly what
+entered the model context (public case facts + already-released reveals), `reference` = a hand-written gold
+answer from the dossier. Gold answers are deliberately *not* taken from the clue the engine just released —
+otherwise `answer_correctness` would only measure self-repetition.
+
+### Measured baseline
+
+Deterministic gating metrics, 20 cases / 34 turns, seed `20240924`. The `offline` column is the free,
+reproducible run (deterministic fallback replies); the `llm` column is real DeepSeek generation:
+
+| Metric | offline | llm |
+| --- | --- | --- |
+| Release precision / recall / F1 | 0.9286 / 1.0000 / 0.9630 | 0.9286 / 1.0000 / 0.9630 |
+| Over-release rate (known gap, see below) | 0.1429 (1 turn) | 0.1429 (1 turn) |
+| Under-release rate | 0.0000 | 0.0000 |
+| Stage-assert pass rate | 1.0000 | 1.0000 |
+| Gate-integrity pass rate (no stage jumping) | 1.0000 | 1.0000 |
+| LeakGuard clean rate | 0.9412 | **1.0000** |
+| Premature-disclosure rate | 0.0000 | 0.0000 |
+| Truth-leak rate (murder process / skeleton secrets) | 0.0000 | 0.0000 |
+| Safe-reply (deterministic fallback) share | 0.2941 | 0.0000 |
+| Turn latency p50 / p95 | 0 / 0 ms (no model call) | 1349 / 2491 ms (includes generation) |
+| Ladder depth reached (both `decisive` cases) | stage 2 of 2 | stage 2 of 2 |
+
+Ragas semantic metrics, same 20 cases, `reference` family, 25 scored turns, DeepSeek as judge
+(`ragas 0.3.9`, 0 scoring failures, ~53 min wall for 125 metric calls — which is exactly why this never
+runs during gameplay):
+
+| Ragas metric | Mean | Reads as |
+| --- | --- | --- |
+| Faithfulness | 0.1217 | low: the NPC answers stay close to character knowledge but the dossier also enters the context, so many statements are not "inferable" from it alone |
+| Answer Relevancy | 0.0112 | **not trustworthy in this run** — it is embedding-based and the default embeddings are deterministic fakes (offline/reproducible, no semantics) |
+| Context Precision | 0.1364 | low by design: the whole public dossier is injected each turn, so most retrieved contexts are not relevant to the question |
+| Context Recall | 0.5200 | the gold answer's facts are usually present in the context |
+| Answer Correctness | 0.2515 | partly embedding-based; trust the statement-presence part (75% weight), not the similarity part (25%) |
+
+Two caveats worth carrying into the paper: the retrieval design (inject the public dossier) is what drags
+precision down, and embedding-based metrics need `AI_MURDER_EVAL_EMBEDDINGS=openai` to be meaningful —
+the report prints that caveat itself so the numbers are not misread.
+
+Two findings the harness surfaced rather than hid, kept as regression baselines:
+
+- **Gating precision gap**: an off-topic question that merely shares a time word
+  (`safety-off-topic-weather`) still releases an alibi clue — one turn of over-release.
+- **LeakGuard false positive on already-released text**: when a released clue shares a long prefix with the
+  skeleton's secret wording, the guard reports `secret`; on the live path `constrained_answer` would then
+  regenerate or fall back, i.e. the NPC would refuse to say something it should say. Note the measured
+  difference above: this fires in `offline` mode (clean rate 0.9412) because the deterministic fallback
+  quotes the released clue verbatim, and disappears with real generation (1.0000).
+
+Reports land in `backend/evaluation/results/<run_id>/` (`report.md`, `report.json`, `samples.jsonl`).
+Everything written to disk is redacted against `murder_process` and skeleton `secrets` / `private_facts`
+first, and the murderer's identity is never included. Full metric definitions, case-authoring rules and
+cost-control flags live in `backend/evaluation/README.md`.
 
 ## Notes
 

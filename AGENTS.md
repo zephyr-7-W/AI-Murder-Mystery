@@ -19,6 +19,10 @@ murderer. Backend is FastAPI + WebSocket; frontend is Vue 3 + Pinia.
 5. **Idempotent actions**: every WebSocket action carries a `client_msg_id`; new actions must be added to
    `main._IDEMPOTENT_ACTIONS` and deduplicated through `_remember_action`, so replay after a reconnect never
    answers twice.
+6. **Evaluation is off the gameplay path**: `backend/evaluation/` (Ragas) is a batch/dev tool only. Game code
+   must never import `evaluation` or `ragas`, and Ragas scoring (an extra LLM call per sample) must never run
+   inside a WebSocket action. `backend/tests/test_evaluation.py` enforces this by scanning sources and by
+   importing `main` in a subprocess to check `sys.modules`.
 
 ## Directory map
 - `backend/main.py` — WebSocket endpoint and session orchestration (`/ws/game/{session_id}`, `/api/games`)
@@ -31,6 +35,7 @@ murderer. Backend is FastAPI + WebSocket; frontend is Vue 3 + Pinia.
 - Start the server: `python -m uvicorn main:app --reload`
 - Unit tests: `python -m pytest tests/test_core.py`
 - Offline skeleton self-check (24 checks): `python -m role_skeleton.selfcheck`
+- Offline evaluation (Ragas batch, dev-only): `python -m evaluation.run_eval`
 - Offline mode: set `AI_MURDER_OFFLINE=1` to use the deterministic path
 
 ## Friday memory collaboration (self-hosted locally, http://127.0.0.1:8080)

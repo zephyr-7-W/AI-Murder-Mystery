@@ -7,6 +7,7 @@
 __pycache__/
 *.py[cod]
 venv/
+venv-*/
 .venv/
 env/
 *.egg-info/
@@ -17,6 +18,9 @@ wheels/
 *.db
 *.db-shm
 *.db-wal
+
+# ---------- 评估产物（跑 evaluation.run_eval 自动生成，可复现，不入库） ----------
+backend/evaluation/results/
 
 # ---------- Node / 前端 ----------
 node_modules/

@@ -1,0 +1,35 @@
+# 评估专用依赖（可选，不进游戏运行时）
+#
+# 为什么单独一个文件：
+#   - Ragas 打分本身要再调一次大模型，延迟与成本都不适合实时交互，只用于开发 / 论文评估；
+#   - ragas 的依赖树较重，且会连带拉入较老的 aiohttp（在 Python 3.13 + Windows 上
+#     没有预编译 wheel，需要本地编译），直接装进游戏 venv 有把 langchain-core 降级、
+#     进而弄坏游戏运行时的风险。
+#
+# 推荐做法：单独建一个评估 venv，和游戏运行时依赖隔离：
+#
+#   cd backend
+#   python -m venv venv-eval
+#   venv-eval\Scripts\python.exe -m pip install -r requirements.txt
+#   venv-eval\Scripts\python.exe -m pip install -r requirements-eval.txt
+#   venv-eval\Scripts\python.exe -m evaluation.run_eval --mode llm --ragas reference
+#
+# 如果坚持装进现有 venv，装完请立刻确认游戏依赖没被降级：
+#   venv\Scripts\python.exe -m pip list | findstr /I "langchain pydantic openai"
+
+# 版本下限是有原因的：不设下限时解析器会退到较老的 ragas，连带钉住 aiohttp<3.11，
+# 而 aiohttp 3.10.x 在 Python 3.13 + Windows 上没有预编译 wheel，需要本地 C 编译器。
+# ragas>=0.3 的依赖树在现代 Python 上是可以直接装 wheel 的。
+#
+# 实测过的可用组合（2026-09，Python 3.13 + Windows + DeepSeek）：
+#   ragas 0.3.9 + langchain-community 0.3.31 + langchain-core 1.6.4 + aiohttp 3.14.3
+#   —— 五个指标全部跑通（faithfulness / answer_relevancy / context_precision /
+#      context_recall / answer_correctness），无需 C 编译器。
+#
+# 为什么必须钉住 langchain-community<0.4：
+#   ragas 0.1~0.4.3 在 ragas/llms/base.py 里都硬 import
+#   `from langchain_community.chat_models.vertexai import ChatVertexAI`，
+#   而这个模块在 langchain-community 0.4.0 已被删除（迁到 langchain-google-vertexai），
+#   于是最新版组合直接 `import ragas` 就 ModuleNotFoundError。
+ragas>=0.3,<0.4
+langchain-community<0.4
